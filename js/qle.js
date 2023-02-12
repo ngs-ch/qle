@@ -180,9 +180,9 @@ function update_hint(id, len, fw, fh, w, h) {
   let lb = len + ' bytes';
   let im = w + 'x' + h + ' image';
   let ff = fw + 'x' + fh + ' font';
-  let ch = ~~(len / fw) + ' characters';
+  let ch = ~~(len / (fw * fh / 8)) + ' characters';
   let cc = ~~(w / fw) + ' columns, ' + ~~(h / fh) + ' rows';
-  let bp = fw + ' bytes per character';
+  let bp = fw * fh / 8 + ' bytes per character';
   let e = $('#' + id);
 
   switch (id) {
@@ -259,16 +259,25 @@ function parse_image(canvas_id) {
   var imageData = ctx.getImageData(0, 0, w, h);
 
   let data = [];
-  lines = ~~(h / 8);
+  
+  let [fw, fh] = current_font_size();
+  var characters_per_line = ~~(w / fw);
+  lines = ~~(h / fh);
+
   for (var line = 0; line < lines; line++) {
-    for (var x = 0; x < w; x++) {
-      v = 0;
-      for (i = 0; i < 8; i++) {
-        y = line * 8 + i;
-        b = getpixel(x, y, imageData);
-        v |= (b << i);
+    for (var i = 0; i < characters_per_line; i++){
+      for (var c = 0; c < fh / 8; c++){
+        for (var u = 0; u < fw; u++){
+          d = 0;
+          for (var v = 0; v < 8; v++){ 
+            x = u + i * fw;
+            y = v + c * 8 + line * fh;
+            b = getpixel(x, y, imageData);
+            d |= (b << v);
+          }
+          data.push(d);
+        }
       }
-      data.push(v);
     }
   }
 
@@ -287,10 +296,10 @@ function parse_image(canvas_id) {
     let chars = parse_text($('#logo').val()).data;
 
     oled_write_P(chars, fw, fh, function(ch, x, y) {
-      let logo_ofs = x + (~~(y / 8) * w);
-      let font_ofs = ~~(ch * fw);
+      let logo_ofs = (x * ~~(fh / 8)) + (~~(y / 8) * w);
+      let font_ofs = ~~(ch * fw * ~~(fh / 8));
 
-      for (let k = 0; k < fw; k++) {
+      for (let k = 0; k < (fw * ~~(fh / 8)); k++) {
         font[font_ofs + k] = data[logo_ofs + k];
       }
 
@@ -351,11 +360,13 @@ function putpixel(x, y, c, imageData) {
 }
 
 function putchar(i, x, y, data, fw, fh, imageData, w, h) {
-  for (var j = 0; j < fw; j++) {
-    var b = data[i * fw + j];
-    for (var k = 0; k < 8; k++) {
-      var c = b & (1 << k) ? 255 : 0;
-      putpixel(x + j, y + k, c, imageData);
+  for (var j = 0; j < ~~(fh / 8); j++){ 
+    for (var k = 0; k < fw; k++) {
+      var b = data[i * fw * (fh / 8) + k + j * fw];
+      for (var l = 0; l < 8; l++) {
+        var c = b & (1 << l) ? 255 : 0;
+        putpixel(x + k, y + l + j * 8, c, imageData);
+      }
     }
   }
 }
@@ -463,7 +474,7 @@ function parse_logo_file(text) {
 }
 
 function render_font(font, fw, fh) {
-  let total = ~~(font.length / fw);
+  let total = ~~(font.length / (fw * fh/8) );
   let w = fw * 32;
   let h = fh * ~~(total / 32);
   update_hint('hint_font', font.length, fw, fh, w, h);
@@ -485,8 +496,8 @@ function parse_text(text, is_font) {
     if (!start) {
       let fs = s.match(/(\d+)x(\d+) font/);
       if (fs) {
-        fw = parseInt(fs[1]);
-        fh = parseInt(fs[2]);
+        fh = parseInt(fs[1]);
+        fw = parseInt(fs[2]);
       }
     }
 
@@ -516,25 +527,19 @@ function parse_text(text, is_font) {
     maxcol = Math.max(maxcol, count);
   }
 
-  // fh is always 8, for fw we use heuristics:
-  // 1) narrow formatting tells us the font width
-  // 2) otherwise consider 8x6 fonts are actually 6x8
-  // 3) no header, load default values
-
-  if (maxcol >= 3 && maxcol <= 7)
-    fw = maxcol;
-  else if (fw && fh) {
-    if (fw == 8 && fh == 6)
-      fw = 6;
-  } else {
+  // default font size from header
+  if (!fw && !fh) {
+    // no header, from input tags
     [_, fw, fh] = load_current_font();
-    //fw = Math.ceil(font.length / 256);
+
+    // otherwise 8 and 6
+    if (!fw) {
+      fw = 6;
+    }
+    if (!fh) {
+      fh = 8;
+    }
   }
-
-  if (!fw)
-    fw = 6;
-
-  fh = 8;
 
   return {
     'data': arr,
